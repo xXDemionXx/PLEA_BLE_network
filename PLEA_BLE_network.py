@@ -1,17 +1,18 @@
 from bluepy import btle
+from bluepy.btle import Peripheral, UUID, DefaultDelegate
 import subprocess
 import time
 import threading
 
 # Define the UUIDs of the characteristics you want to subscribe to
 DEVICE_MAC_ADDRESS = "84:FC:E6:6B:D6:C1"
+NETWORK_SERVICE_UUID = "9fd1e9cf-97f7-4b0b-9c90-caac19dba4f8"
 NETWORK_NAMES_CH_UUID = "0fd59f95-2c93-4bf8-b5f0-343e838fa302"
 NETWORK_CONNECT_CH_UUID = "15eb77c1-6581-4144-b510-37d09f4294ed"
 NETWORK_MESSAGE_CH_UUID = "773f99ff-4d87-4fe4-81ff-190ee1a6c916"
 NETWORK_COMMANDS_CH_UUID = "68b82c8a-28ce-43c3-a6d2-509c71569c44"
 
-
-# Clas that handles network notifications
+# Class that handles network notifications
 class NetworkNotificationDelegate(btle.DefaultDelegate):
     def __init__(self, network_connect_ch, network_commands_ch):
         super().__init__()
@@ -23,7 +24,7 @@ class NetworkNotificationDelegate(btle.DefaultDelegate):
             print("Notification from network_connect_ch:", data)
         elif cHandle == self.network_commands_ch.getHandle():
             print("Notification from network_commands_ch:", data)
-            handle_network_commands(data)
+            handle_network_commands(data.decode('utf-8'))
 
 def notification_loop(peripheral, stop_event):
     while not stop_event.is_set():
@@ -46,14 +47,17 @@ def connect_to_device():
         return None
 
 def connect_to_network_characteristics(peripheral):
+    # Connect to the service
+    network_service = peripheral.getServiceByUUID(UUID(NETWORK_SERVICE_UUID))
+    
     # Send characteristics #
-    network_names_ch = peripheral.getCharacteristics(uuid=NETWORK_NAMES_CH_UUID)[0]
-    network_message_ch = peripheral.getCharacteristics(uuid=NETWORK_MESSAGE_CH_UUID)[0]
+    network_names_ch = network_service.getCharacteristics(NETWORK_NAMES_CH_UUID)[0]
+    network_message_ch = network_service.getCharacteristics(NETWORK_MESSAGE_CH_UUID)[0]
     ###
     
     # Receive characteristics #
-    network_connect_ch = peripheral.getCharacteristics(uuid=NETWORK_CONNECT_CH_UUID)[0]
-    network_commands_ch = peripheral.getCharacteristics(uuid=NETWORK_COMMANDS_CH_UUID)[0]
+    network_connect_ch = network_service.getCharacteristics(NETWORK_CONNECT_CH_UUID)[0]
+    network_commands_ch = network_service.getCharacteristics(NETWORK_COMMANDS_CH_UUID)[0]
     
     peripheral.setDelegate(NetworkNotificationDelegate(network_connect_ch, network_commands_ch))
     
@@ -64,6 +68,23 @@ def connect_to_network_characteristics(peripheral):
     peripheral.writeCharacteristic(network_commands_ch_handle, b'\x01\x00', withResponse=True)  # Enable notifications
 
     return network_names_ch, network_connect_ch, network_message_ch, network_commands_ch
+
+def BLE_send_networks_string(networks_string):
+    string_length = len(networks_string)
+    chunks_array = []
+
+    # Size of chunks we can send over BLE is 20 bytes
+    for i in range(string_length // 20):
+        chunks_array.append(networks_string[i * 20 : (i + 1) * 20])
+    
+    if string_length % 20 != 0:  # If there is a leftover smaller than 20 chars
+        chunks_array.append(networks_string[-(string_length % 20):])
+    
+    for chunk in chunks_array:	# Send the chunks over BLE
+        print(chunk)
+        network_names_ch.write(bytes(str(chunk), 'utf-8'))
+        time.sleep(0.003)
+
 ###
 
 # Network names #
@@ -108,19 +129,20 @@ def get_ip_for_device(device):
 
 
 def handle_network_commands(network_command):
-	
-	#print(network_command)
-	
+    
+    #print(network_command)
+    
     match network_command:
-        case b's':   # Search for networks
+        case 's':   # Search for networks
             print("Search for networks")
-            netwoeks_string = get_networks_string()
-            print(netwoeks_string)
+            networks_string = get_networks_string()
+            print(networks_string)
+            BLE_send_networks_string(networks_string)
             return
-        case "p":   # Get IP
+        case 'p':   # Get IP
             print("Get IP")
             return
-        case "d":   # Disconnect from network
+        case 'd':   # Disconnect from network
             print("Disconnect from network")
             return
         case _:
@@ -137,7 +159,7 @@ def BLE_main():
 
     # Declare wanted characteristics #
     # Declare network characteristics:
-    network_names_ch, network_connect_ch, network_message_ch, network_commands_ch = None, None, None, None
+    global network_names_ch, network_connect_ch, network_message_ch, network_commands_ch
     ###
     notification_thread = None      # Thread for handling incoming notifications
     stop_event = threading.Event()
