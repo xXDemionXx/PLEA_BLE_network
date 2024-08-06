@@ -1,4 +1,5 @@
 from bluepy import btle
+import subprocess
 import time
 import threading
 
@@ -9,28 +10,31 @@ NETWORK_CONNECT_CH_UUID = "15eb77c1-6581-4144-b510-37d09f4294ed"
 NETWORK_MESSAGE_CH_UUID = "773f99ff-4d87-4fe4-81ff-190ee1a6c916"
 NETWORK_COMMANDS_CH_UUID = "68b82c8a-28ce-43c3-a6d2-509c71569c44"
 
+
+# Clas that handles network notifications
 class NetworkNotificationDelegate(btle.DefaultDelegate):
-    def __init__(self, char1, char2):
+    def __init__(self, network_connect_ch, network_commands_ch):
         super().__init__()
-        self.char1 = char1
-        self.char2 = char2
+        self.network_connect_ch = network_connect_ch
+        self.network_commands_ch = network_commands_ch
 
     def handleNotification(self, cHandle, data):
-        if cHandle == self.char1.getHandle():
-            print("Notification from Characteristic 1:", data)
-        elif cHandle == self.char2.getHandle():
-            print("Notification from Characteristic 2:", data)
+        if cHandle == self.network_connect_ch.getHandle():
+            print("Notification from network_connect_ch:", data)
+        elif cHandle == self.network_commands_ch.getHandle():
+            print("Notification from network_commands_ch:", data)
+            handle_network_commands(data)
 
 def notification_loop(peripheral, stop_event):
     while not stop_event.is_set():
         try:
-            if peripheral.waitForNotifications(1.0):
+            if peripheral.waitForNotifications(1.0):    # Constantly listen for notifications
                 continue
-            print("Performing other tasks in the notification loop")
         except btle.BTLEDisconnectError:
             print("Notification loop detected disconnection.")
             stop_event.set()  # Signal the main thread that disconnection has occurred
 
+# Connect functions
 def connect_to_device():
     try:
         print("Attempting to connect to ESP32...")
@@ -60,9 +64,76 @@ def connect_to_network_characteristics(peripheral):
     peripheral.writeCharacteristic(network_commands_ch_handle, b'\x01\x00', withResponse=True)  # Enable notifications
 
     return network_names_ch, network_connect_ch, network_message_ch, network_commands_ch
+###
+
+# Network names #
+def is_ethernet_connected(device):
+    # Use nmcli to check if an Ethernet device is connected
+    result = subprocess.run(['nmcli', '-g', 'GENERAL.STATE', 'device', 'show', device], capture_output=True, text=True)
+    state = result.stdout.strip()
+    return state == '100 (connected)'
+
+def get_networks_string():
+    networks = ""
+    
+    # List available Wi-Fi networks
+    wifi_result = subprocess.run(['nmcli', '-t', '-f', 'SSID', 'device', 'wifi', 'list'], capture_output=True, text=True)
+    wifi_networks = wifi_result.stdout.split('\n')
+    
+    for ssid in wifi_networks:
+        if ssid.strip():  # Skip empty SSIDs
+            networks += f"W:<<{ssid.strip()}>>"
+    
+    # List available Ethernet connections
+    ethernet_result = subprocess.run(['nmcli', '-t', '-f', 'DEVICE,TYPE', 'device', 'status'], capture_output=True, text=True)
+    ethernet_lines = ethernet_result.stdout.split('\n')
+    
+    for line in ethernet_lines:
+        if 'ethernet' in line:
+            parts = line.split(':')
+            device_name = parts[0].strip()
+            if is_ethernet_connected(device_name):
+                networks += f"E:<<{device_name}>>"
+    networks += '#'     # Tells the receiver the string is done
+    return networks
+###
+
+# IP #
+def get_ip_for_device(device):
+    # Use nmcli to get IP address for a specific device
+    result = subprocess.run(['nmcli', '-g', 'IP4.ADDRESS', 'device', 'show', device], capture_output=True, text=True)
+    ip_address = result.stdout.strip()
+    return ip_address if ip_address else "No IP assigned"
+###
+
+
+def handle_network_commands(network_command):
+	
+	#print(network_command)
+	
+    match network_command:
+        case b's':   # Search for networks
+            print("Search for networks")
+            netwoeks_string = get_networks_string()
+            print(netwoeks_string)
+            return
+        case "p":   # Get IP
+            print("Get IP")
+            return
+        case "d":   # Disconnect from network
+            print("Disconnect from network")
+            return
+        case _:
+            print("Unknown command")
+            return
+
 
 def BLE_main():
+    # Variables #
     peripheral = None
+    new_network_command_flag = False
+    #network_command = None
+    ###
 
     # Declare wanted characteristics #
     # Declare network characteristics:
@@ -99,9 +170,11 @@ def BLE_main():
                 peripheral = None
                 time.sleep(5)
             else:
-                try:
-                    print("Connected, performing main loop tasks...")
-                    time.sleep(5)  # Simulate other main loop tasks
+                try:    # Main loop handling
+                    if new_network_command_flag == True:
+                        print("Received command: ")
+                        #handle_network_commands(network_command)
+                        #new_network_command_flag = False
                 except btle.BTLEDisconnectError:
                     print("Detected disconnection during main loop tasks.")
                     stop_event.set()
