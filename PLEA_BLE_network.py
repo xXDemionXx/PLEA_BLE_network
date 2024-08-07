@@ -127,6 +127,42 @@ def get_ip_for_device(device):
     result = subprocess.run(['nmcli', '-g', 'IP4.ADDRESS', 'device', 'show', device], capture_output=True, text=True)
     ip_address = result.stdout.strip()
     return ip_address if ip_address else "No IP assigned"
+
+# IPv4 #
+def get_ipv4_addresses():
+    try:
+        # Run the ip command to get IP address information
+        result = subprocess.run(['ip', 'addr'], capture_output=True, text=True)
+        
+        interfaces = {}
+        interface_name = None
+
+        # Parse the output to extract IPv4 addresses
+        for line in result.stdout.split('\n'):
+            if line.startswith(' '):
+                # This line contains IP address information
+                if 'inet ' in line:  # Only consider 'inet' for IPv4
+                    ip_address = line.strip().split()[1]
+                    if interface_name:
+                        interfaces[interface_name].append(ip_address)
+            else:
+                # This line contains the interface name
+                if line:
+                    parts = line.split(': ')
+                    if len(parts) > 1:
+                        interface_name = parts[1].split('@')[0]
+                        if interface_name not in interfaces:
+                            interfaces[interface_name] = []
+        
+        IPs_string = "<<IP info>>"
+        for interface, addresses in interfaces.items():  # Corrected 'interface' to 'interfaces'
+            IPs_string += f"<<{interface}: {', '.join(addresses)}>>"
+        IPs_string += '#'
+        return IPs_string
+
+    except Exception as e:
+        print(f"Error retrieving IP addresses: {e}")
+        return ""
 ###
 
 # Network commands #
@@ -140,6 +176,9 @@ def handle_network_commands(network_command):
             return
         case 'p':  # Get IP
             print("Get IP")
+            IPv4_string = get_ipv4_addresses()
+            IPv4_array = BLE_chop_string_to_chunks(IPv4_string, 20)
+            BLE_send_array(IPv4_array, network_message_ch)
             return
         case 'd':  # Disconnect from network
             print("Disconnect from all networks")
@@ -217,6 +256,29 @@ def disconnect_all_networks():
 
 ###
 
+# BLE #
+def BLE_chop_string_to_chunks(string, chunk_size):
+	#
+	# Takes in a string and chops it into an arraz
+	# of chunks, size of chunk_size.
+	#
+	chunks_array = []
+	string_length = len(string)
+
+    # Size of chunks we can send over BLE is 20 bytes
+	for i in range(string_length // chunk_size):
+		chunks_array.append(string[i * chunk_size : (i + 1) * chunk_size])
+		
+	if string_length % chunk_size != 0:	# If there is a leftover smaller than 20 chars
+		chunks_array.append(string[-(string_length % chunk_size):])
+		
+	return chunks_array
+
+def BLE_send_array(array, characteristic):
+	for entry in array:	# Send the chunks over BLE
+		characteristic.write(bytes(str(entry), 'utf-8'))
+		time.sleep(0.003)
+
 def BLE_main():
     # Variables #
     peripheral = None
@@ -268,6 +330,7 @@ def BLE_main():
                 except btle.BTLEDisconnectError:
                     print("Detected disconnection during main loop tasks.")
                     stop_event.set()
+###
 
 if __name__ == "__main__":
     BLE_main()
