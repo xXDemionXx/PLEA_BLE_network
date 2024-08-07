@@ -110,16 +110,13 @@ def get_networks_string():
         if ssid.strip():  # Skip empty SSIDs
             networks += f"W:<<{ssid.strip()}>>"
     
-    # List available Ethernet connections
-    ethernet_result = subprocess.run(['nmcli', '-t', '-f', 'DEVICE,TYPE', 'device', 'status'], capture_output=True, text=True)
-    ethernet_lines = ethernet_result.stdout.split('\n')
-    
-    for line in ethernet_lines:
-        if 'ethernet' in line:
-            parts = line.split(':')
-            device_name = parts[0].strip()
-            if is_ethernet_connected(device_name):
-                networks += f"E:<<{device_name}>>"
+    # Check if eth0 is physically connected
+    result = subprocess.run(['sudo', 'ethtool', 'eth0'], capture_output=True, text=True)
+    for line in result.stdout.split('\n'):
+        if 'Link detected:' in line:
+            # Check if the link is detected as yes
+            if 'yes' in line:
+                networks += f"E:<<eth0>>"
     networks += '#'  # Tells the receiver the string is done
     return networks
 ###
@@ -145,7 +142,8 @@ def handle_network_commands(network_command):
             print("Get IP")
             return
         case 'd':  # Disconnect from network
-            print("Disconnect from network")
+            print("Disconnect from all networks")
+            disconnect_all_networks()
             return
         case _:
             print("Unknown command")
@@ -192,6 +190,31 @@ def connect_to_network(network_info):
             print(result.stderr)
     else:
         print("Error: Unknown network type.")
+
+def get_active_networks():
+    result = subprocess.run(['nmcli', '-t', '-f', 'UUID,DEVICE', 'connection', 'show', '--active'],
+                            capture_output=True, text=True)
+    if result.returncode != 0:
+        print(f"Error getting active connections: {result.stderr}")
+        return []
+    
+    active_connections = []
+    for line in result.stdout.strip().split('\n'):
+        if line:
+            uuid, device = line.split(':')
+            active_connections.append((uuid, device))
+    
+    return active_connections
+
+def disconnect_all_networks():
+    active_connections = get_active_networks()
+    for uuid, device in active_connections:
+        result = subprocess.run(['nmcli', 'connection', 'down', uuid], capture_output=True, text=True)
+        if result.returncode == 0:
+            print(f"Disconnected {device} with UUID {uuid}")
+        else:
+            print(f"Failed to disconnect {device} with UUID {uuid}: {result.stderr}")
+
 ###
 
 def BLE_main():
