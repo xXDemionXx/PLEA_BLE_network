@@ -23,12 +23,10 @@ class NetworkNotificationDelegate(btle.DefaultDelegate):
 
     def handleNotification(self, cHandle, data):
         if cHandle == self.network_connect_ch.getHandle():
-            print("Notification from network_connect_ch:", data)
             self.connect_network_string += data.decode('utf-8')
             if self.connect_network_string[-1] == '#':
                 self.connect_network_string_finished = True
         elif cHandle == self.network_commands_ch.getHandle():
-            print("Notification from network_commands_ch:", data)
             handle_network_commands(data.decode('utf-8'))
 
 def notification_loop(peripheral, stop_event):
@@ -87,7 +85,6 @@ def BLE_send_networks_string(networks_string):
         chunks_array.append(networks_string[-(string_length % 20):])
     
     for chunk in chunks_array:  # Send the chunks over BLE
-        print(chunk)
         network_names_ch.write(bytes(str(chunk), 'utf-8'))
         time.sleep(0.003)
 ###
@@ -120,13 +117,6 @@ def get_networks_string():
     networks += '#'  # Tells the receiver the string is done
     return networks
 ###
-
-# IP #
-def get_ip_for_device(device):
-    # Use nmcli to get IP address for a specific device
-    result = subprocess.run(['nmcli', '-g', 'IP4.ADDRESS', 'device', 'show', device], capture_output=True, text=True)
-    ip_address = result.stdout.strip()
-    return ip_address if ip_address else "No IP assigned"
 
 # IPv4 #
 def get_ipv4_addresses():
@@ -165,13 +155,12 @@ def get_ipv4_addresses():
         return ""
 ###
 
-# Network commands #
+# Handle network commands #
 def handle_network_commands(network_command):
     match network_command:
         case 's':  # Search for networks
             print("Search for networks")
             networks_string = get_networks_string()
-            print(networks_string)
             BLE_send_networks_string(networks_string)
             return
         case 'p':  # Get IP
@@ -189,7 +178,7 @@ def handle_network_commands(network_command):
             return
 ###
 
-# Network connect-disconnect #
+# Network #
 def connect_to_network(network_info):
     # Incoming string looks like this:
     # If it's WiFi: <<W:>><<NetworkName>><<Password>>
@@ -213,9 +202,9 @@ def connect_to_network(network_info):
         network_password = network_info_list[2]
         # Connect to WiFi
         result = subprocess.run(['nmcli', 'device', 'wifi', 'connect', network_name, 'password', network_password], capture_output=True, text=True)
+        print(result)
         if result.returncode == 0:
             print(f"Successfully connected to Wi-Fi network {network_name}")
-            # get_ip_addresses()
         else:
             print(f"Failed to connect to Wi-Fi network {network_name}")
             print(result.stderr)
@@ -248,12 +237,46 @@ def get_active_networks():
 def disconnect_all_networks():
     active_connections = get_active_networks()
     for uuid, device in active_connections:
-        result = subprocess.run(['nmcli', 'connection', 'down', uuid], capture_output=True, text=True)
-        if result.returncode == 0:
-            print(f"Disconnected {device} with UUID {uuid}")
-        else:
-            print(f"Failed to disconnect {device} with UUID {uuid}: {result.stderr}")
+        if device != "lo":
+           result = subprocess.run(['nmcli', 'device', 'down', device], capture_output=True, text=True)
+           if result.returncode == 0:
+              print(f"Disconnected {device} with UUID {uuid}")
+           else:
+              print(f"Failed to disconnect {device} with UUID {uuid}: {result.stderr}")
 
+def get_networks_connection_status_string():
+    try:
+        # Run nmcli to get the status of network devices
+        device_status_result = subprocess.run(['nmcli', '-t', '-f', 'DEVICE,TYPE,STATE', 'device', 'status'], capture_output=True, text=True)
+        
+        connected_devices = []
+        for line in device_status_result.stdout.splitlines():
+            device, type_, state = line.split(':')
+            if state == 'connected':
+                # Get the details of the active connection for this device
+                connection_result = subprocess.run(['nmcli', '-t', '-f', 'NAME,DEVICE', 'connection', 'show', '--active'], capture_output=True, text=True)
+                for conn_line in connection_result.stdout.splitlines():
+                    conn_name, conn_device = conn_line.split(':')
+                    if conn_device == device:
+                        if type_ == 'wifi':
+                            ssid_result = subprocess.run(['nmcli', '-t', '-f', 'SSID', 'device', 'wifi', 'list'], capture_output=True, text=True)
+                            ssid = ''
+                            for ssid_line in ssid_result.stdout.splitlines():
+                                if ssid_line.startswith('SSID:'):
+                                    ssid = ssid_line.split(':')[1].strip()
+                                    break
+                            connected_devices.append(f"W:{conn_name}")
+                        else:
+                            connected_devices.append(f"E:{conn_name}")
+
+        if connected_devices:
+            return "<<C>><<" + ", ".join(connected_devices) + ">>#"
+        else:
+            return "<<D>>#"		# Send all networks disconnected message
+    
+    except Exception as e:
+        print(f"Error checking network connection: {e}")
+        return "Error retrieving network status"
 ###
 
 # BLE #
@@ -283,13 +306,14 @@ def BLE_main():
     # Variables #
     peripheral = None
     global network_names_ch, network_connect_ch, network_message_ch, network_commands_ch, delegate
-    
+    last_connection_status = ""
+    #current_connection_status = ""
     ###
     
     # Declare wanted characteristics #
     notification_thread = None  # Thread for handling incoming notifications
     stop_event = threading.Event()
-
+    
     while True:
         if peripheral is None:  # We are not connected
             peripheral = connect_to_device()  # Try to connect
@@ -318,15 +342,23 @@ def BLE_main():
                 time.sleep(5)
             else:
                 try:  # Main loop handling
-                    if delegate.connect_network_string_finished:
-                        print("End of connect_network_string")
-                        print(delegate.connect_network_string)
+                    if delegate.connect_network_string_finished:	# Check if we need to connect to a network
                         
                         connect_to_network(delegate.connect_network_string)
                         
                         # After connecting reset flag and string
                         delegate.connect_network_string = ""
                         delegate.connect_network_string_finished = False
+                        
+                    #current_connection_status = get_networks_connection_status_string()
+                    #if last_connection_status != current_connection_status:		# Check if any network connection has changed
+                        #print(current_connection_status)
+                        #last_connection_status = current_connection_status
+                        #net_status_array = BLE_chop_string_to_chunks(current_connection_status, 20)
+                        #print(net_status_string)
+                        #print(net_status_array)
+                        #BLE_send_array(net_status_array, network_message_ch)
+                     
                 except btle.BTLEDisconnectError:
                     print("Detected disconnection during main loop tasks.")
                     stop_event.set()
