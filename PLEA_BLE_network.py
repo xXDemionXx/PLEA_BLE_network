@@ -303,7 +303,7 @@ def BLE_main():
     ###
     
     stop_event = threading.Event()
-    
+
     while True:
         if peripheral is None:  # We are not connected via BLE
             peripheral = BLE_connect_to_device()  # Try to connect
