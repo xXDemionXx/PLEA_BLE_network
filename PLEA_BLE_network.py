@@ -55,7 +55,7 @@ def main():
     peripheral, char1, char2 = None, None, None
     notification_thread = None
     stop_event = threading.Event()
-    
+
     while True:
         if peripheral is None:
             peripheral, char1, char2 = connect_to_device()
