@@ -96,12 +96,6 @@ def BLE_send_networks_string(networks_string):
 ###
 
 # Network names #
-def is_ethernet_connected(device):
-    # Use nmcli to check if an Ethernet device is connected
-    result = subprocess.run(['nmcli', '-g', 'GENERAL.STATE', 'device', 'show', device], capture_output=True, text=True)
-    state = result.stdout.strip()
-    return state == '100 (connected)'
-
 def get_networks_string():
     networks = ""
     
@@ -151,7 +145,7 @@ def get_ipv4_addresses():
                             interfaces[interface_name] = []
         
         IPs_string = "<<IP info>>"
-        for interface, addresses in interfaces.items():  # Corrected 'interface' to 'interfaces'
+        for interface, addresses in interfaces.items():
             IPs_string += f"<<{interface}: {', '.join(addresses)}>>"
         IPs_string += '#'
         return IPs_string
@@ -167,7 +161,8 @@ def handle_network_commands(network_command):
         case 's':  # Search for networks
             print("Search for networks")
             networks_string = get_networks_string()
-            BLE_send_networks_string(networks_string)
+            networks_array = BLE_chop_string_to_chunks(networks_string, 20)
+            BLE_send_array(networks_array, network_names_ch)
             return
         case 'p':  # Get IP
             print("Get IP")
@@ -175,7 +170,7 @@ def handle_network_commands(network_command):
             IPv4_array = BLE_chop_string_to_chunks(IPv4_string, 20)
             BLE_send_array(IPv4_array, network_message_ch)
             return
-        case 'd':  # Disconnect from network
+        case 'd':  # Disconnect from networks
             print("Disconnect from all networks")
             disconnect_all_networks()
             return
